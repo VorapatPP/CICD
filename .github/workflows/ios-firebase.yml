@@ -1,0 +1,85 @@
+name: iOS CI → Firebase Hosting (Free)
+
+on:
+  push:
+    branches: [ "main" ]  # adjust if needed
+  pull_request:
+
+jobs:
+  build-and-deploy:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            ~/Library/Developer/Xcode/DerivedData
+          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: ${{ runner.os }}-spm-
+
+      - name: Show Xcode version
+        run: |
+          xcodebuild -version
+          xcode-select -p
+
+      - name: Run Unit Tests (Simulator, free)
+        run: |
+          xcodebuild \
+            -scheme "YourSharedScheme" \
+            -destination 'platform=iOS Simulator,name=iPhone 15' \
+            -sdk iphonesimulator \
+            clean test \
+            -resultBundlePath TestResult.xcresult
+
+      - name: Upload test results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TestResult
+          path: TestResult.xcresult
+
+      - name: Build App for Simulator (no signing)
+        run: |
+          xcodebuild \
+            -scheme "CICD" \
+            -destination 'generic/platform=iOS Simulator' \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            clean build \
+            -derivedDataPath BuildDir
+
+          # Zip simulator build products (for learning purposes)
+          mkdir -p out
+          (cd BuildDir/Build/Products/Debug-iphonesimulator && zip -r ../../../out/SimulatorProducts.zip .)
+
+      - name: Prepare Firebase Hosting payload
+        run: |
+          STAMP=$(date +%Y%m%d-%H%M%S)
+          mkdir -p public/builds
+          cp out/SimulatorProducts.zip "public/builds/SimulatorProducts-${STAMP}.zip"
+
+          # Generate a minimal index page linking to the latest artifact
+          cat > public/index.html <<'HTML'
+          <!doctype html>
+          <meta charset="utf-8" />
+          <title>iOS CI Demo</title>
+          <h1>iOS CI Demo (Simulator artifacts)</h1>
+          <p>This page is for learning CI/CD only. iOS simulator zips are not installable on real devices.</p>
+          <ul>
+          HTML
+          # Append a list item for this new file
+          echo "<li><a href=\"/builds/SimulatorProducts-${STAMP}.zip\">SimulatorProducts-${STAMP}.zip</a></li>" >> public/index.html
+          echo "</ul>" >> public/index.html
+
+      - name: Install Firebase CLI
+        run: npm i -g firebase-tools
+
+      - name: Deploy to Firebase Hosting (free)
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: firebase deploy --only hosting
